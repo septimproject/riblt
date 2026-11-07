@@ -36,3 +36,15 @@ func TestMappingAlwaysAdvances(t *testing.T) {
 		}
 	}
 }
+
+func TestMappingProgressAfterRoundedUnitRatio(t *testing.T) {
+	const multiplier uint64 = 0xda942042e4dd58b5
+	inverse := uint64(1)
+	for i := 0; i < 6; i++ {
+		inverse *= 2 - multiplier*inverse
+	}
+	m := randomMapping{prng: (^uint64(0)) * inverse}
+	if next := m.nextIndex(); next != 1 {
+		t.Fatalf("rounded zero increment must advance once, got %d", next)
+	}
+}
