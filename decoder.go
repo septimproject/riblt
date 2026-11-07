@@ -1,7 +1,22 @@
 package riblt
 
+import "errors"
+
+var ErrDecodeBudget = errors.New("rateless decode work budget exhausted")
+var ErrInvalidDegree = errors.New("invalid degree for decodable coded symbol")
+
+func spendDecodeWork(work *int) error {
+	if work != nil {
+		if *work <= 0 {
+			return ErrDecodeBudget
+		}
+		*work--
+	}
+	return nil
+}
+
 // Decoder computes the symmetric difference between two sets A, B. The Decoder
-// knows B (the local set) and expects coded symbols for A (the remote set). 
+// knows B (the local set) and expects coded symbols for A (the remote set).
 type Decoder[T Symbol[T]] struct {
 	// coded symbols received so far
 	cs []CodedSymbol[T]
@@ -69,9 +84,12 @@ func (d *Decoder[T]) AddCodedSymbol(c CodedSymbol[T]) {
 	return
 }
 
-func (d *Decoder[T]) applyNewSymbol(t HashedSymbol[T], direction int64) randomMapping {
+func (d *Decoder[T]) applyNewSymbol(t HashedSymbol[T], direction int64, work *int) (randomMapping, error) {
 	m := randomMapping{t.Hash, 0}
 	for m.lastIndex < len(d.cs) {
+		if err := spendDecodeWork(work); err != nil {
+			return m, err
+		}
 		cidx := m.lastIndex
 		d.cs[cidx] = d.cs[cidx].apply(t, direction)
 		// Check if the coded symbol is now decodable. We do not want to insert
@@ -98,12 +116,25 @@ func (d *Decoder[T]) applyNewSymbol(t HashedSymbol[T], direction int64) randomMa
 		}
 		m.nextIndex()
 	}
-	return m
+	return m, nil
 }
 
 // TryDecode tries to decode all coded symbols received so far.
 func (d *Decoder[T]) TryDecode() {
+	if err := d.TryDecodeWithBudget(nil); err != nil {
+		panic(err)
+	}
+}
+
+// TryDecodeWithBudget charges each visited cell and peeling step to work.
+// A nil budget retains the original unbounded behavior. After any error, discard
+// or Reset the decoder; partially peeled state must not be reused. Callers must
+// separately bound source sets, received symbols and their counts before adding.
+func (d *Decoder[T]) TryDecodeWithBudget(work *int) error {
 	for didx := 0; didx < len(d.decodable); didx += 1 {
+		if err := spendDecodeWork(work); err != nil {
+			return err
+		}
 		cidx := d.decodable[didx]
 		c := d.cs[cidx]
 		// We do not need to compare Hash and Symbol.Hash() below, because we
@@ -121,14 +152,20 @@ func (d *Decoder[T]) TryDecode() {
 			ns := HashedSymbol[T]{}
 			ns.Symbol = ns.Symbol.XOR(c.Symbol)
 			ns.Hash = c.Hash
-			m := d.applyNewSymbol(ns, remove)
+			m, err := d.applyNewSymbol(ns, remove, work)
+			if err != nil {
+				return err
+			}
 			d.remote.addHashedSymbolWithMapping(ns, m)
 			d.decoded += 1
 		case -1:
 			ns := HashedSymbol[T]{}
 			ns.Symbol = ns.Symbol.XOR(c.Symbol)
 			ns.Hash = c.Hash
-			m := d.applyNewSymbol(ns, add)
+			m, err := d.applyNewSymbol(ns, add, work)
+			if err != nil {
+				return err
+			}
 			d.local.addHashedSymbolWithMapping(ns, m)
 			d.decoded += 1
 		case 0:
@@ -136,10 +173,11 @@ func (d *Decoder[T]) TryDecode() {
 		default:
 			// a decodable symbol does not turn undecodable, so its degree must
 			// be -1, 0, or 1
-			panic("invalid degree for decodable coded symbol")
+			return ErrInvalidDegree
 		}
 	}
 	d.decodable = d.decodable[:0]
+	return nil
 }
 
 // Reset clears d. It is more efficient to call Reset to reuse an existing

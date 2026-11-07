@@ -10,7 +10,7 @@ import (
 // random initial PRNG state, index i will be present in the generated sequence
 // with probability 1/(1+i/2), for any non-negative i.
 type randomMapping struct {
-	prng    uint64 // PRNG state
+	prng      uint64 // PRNG state
 	lastIndex int    // the last index the symbol was mapped to
 }
 
@@ -27,6 +27,14 @@ func (s *randomMapping) nextIndex() int {
 	// our u actually comes from sampling a random uint64 r, and then dividing
 	// it by maxUint64, i.e., 1<<64. So we can replace (1-u)^(-1/2) with
 	//   1<<32 / sqrt(r).
-	s.lastIndex += int(math.Ceil((float64(s.lastIndex) + 1.5) * ((1<<32)/math.Sqrt(float64(s.prng)+1) - 1)))
+	gap := math.Ceil((float64(s.lastIndex) + 1.5) * ((1<<32)/math.Sqrt(float64(s.prng)+1) - 1))
+	maximum := int(^uint(0) >> 1)
+	if gap >= float64(maximum-s.lastIndex) {
+		s.lastIndex = maximum
+	} else {
+		// Floating-point rounding at the top of the PRNG range can produce
+		// zero. Every mapping must advance, including on adversarial hashes.
+		s.lastIndex += max(1, int(gap))
+	}
 	return s.lastIndex
 }
